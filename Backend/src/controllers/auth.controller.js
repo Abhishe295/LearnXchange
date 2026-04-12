@@ -2,12 +2,15 @@ import User from "../models/User.js";
 import bcrypt from "bcryptjs";
 import { generateToken } from "../utils/generateToken.js";
 
+const isProduction = process.env.NODE_ENV === "production";
+
 const cookieOptions = {
-  httpOnly: true,
-  secure: false, // true in production (https)
-  sameSite: "strict",
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+httpOnly: true,
+secure: isProduction,                  // true in production
+sameSite: isProduction ? "none" : "lax", // CRITICAL FIX
+maxAge: 7 * 24 * 60 * 60 * 1000,
 };
+
 
 export const register = async (req, res) => {
   try {
