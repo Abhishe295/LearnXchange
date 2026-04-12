@@ -1,48 +1,39 @@
 import { create } from "zustand";
 import { io } from "socket.io-client";
 
-const BASE_URL =
+export const useSocketStore = create((set, get) => ({
+  socket: null,
+
+  connect: () => {
+    const existing = get().socket;
+    if (existing) return; // 🔥 prevent multiple connections
+
+    const BASE_URL =
 import.meta.env.VITE_BACKEND_URL || "http://localhost:6550";
 
-export const useSocketStore = create((set, get) => ({
-socket: null,
+    const socket = io(BASE_URL, {
+      withCredentials: true,
+    });
 
-connect: () => {
-const existing = get().socket;
-if (existing) return; // prevent multiple connections
+    set({ socket });
+  },
 
-```
-const socket = io(BASE_URL, {
-  withCredentials: true,
-});
+  emit: (event, data) => {
+    const socket = get().socket;
+    if (!socket) return console.log("Socket not connected ❌");
 
-set({ socket });
-```
+    socket.emit(event, data);
+  },
 
-},
+  on: (event, cb) => {
+    const socket = get().socket;
+    if (!socket) return;
 
-emit: (event, data) => {
-const socket = get().socket;
-if (!socket) return console.log("Socket not connected ❌");
+    socket.on(event, cb);
+  },
 
-```
-socket.emit(event, data);
-```
-
-},
-
-on: (event, cb) => {
-const socket = get().socket;
-if (!socket) return;
-
-```
-socket.on(event, cb);
-```
-
-},
-
-off: (event) => {
-const socket = get().socket;
-socket?.off(event);
-},
+  off: (event) => {
+    const socket = get().socket;
+    socket?.off(event);
+  },
 }));
