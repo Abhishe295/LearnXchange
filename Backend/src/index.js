@@ -21,8 +21,9 @@ const PORT = process.env.PORT || 6550;
 /* ================= CORS ================= */
 const allowedOrigins = [
   "http://localhost:5173",
-  process.env.FRONTEND_URL,
-];
+  "http://localhost:5174",
+  process.env.FRONTEND_URL, // set this in Render env vars
+].filter(Boolean);
 
 const server = http.createServer(app);
 const io = initSocket(server);
@@ -30,7 +31,7 @@ const io = initSocket(server);
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // postman / mobile
+      if (!origin) return callback(null, true);
       if (allowedOrigins.includes(origin)) {
         return callback(null, true);
       }

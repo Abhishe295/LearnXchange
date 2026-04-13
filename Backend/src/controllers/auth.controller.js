@@ -5,10 +5,10 @@ import { generateToken } from "../utils/generateToken.js";
 const isProduction = process.env.NODE_ENV === "production";
 
 const cookieOptions = {
-httpOnly: true,
-secure: isProduction,                  // true in production
-sameSite: isProduction ? "none" : "lax", // CRITICAL FIX
-maxAge: 7 * 24 * 60 * 60 * 1000,
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  maxAge: 7 * 24 * 60 * 60 * 1000,
 };
 
 
@@ -77,8 +77,12 @@ export const login = async (req, res) => {
 
 export const logout = (req, res) => {
   res
-    .clearCookie("token")
-    .json({ success: true, message: "Logged out successfully" });
+    .clearCookie("token", {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+    })
+    .json({ success: true, message: "Logged out" });
 };
 
 export const getMe = async (req, res) => {
