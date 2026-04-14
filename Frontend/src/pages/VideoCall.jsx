@@ -1,34 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useSocketStore } from "../store/socketStore";
+import {api} from "../services/api";
 import {
   Mic, MicOff, Video, VideoOff,
   Monitor, MonitorOff, PhoneOff,
   Wifi, WifiOff, Users
 } from "lucide-react";
 import toast from "react-hot-toast";
-
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    {
-      urls: "turn:openrelay.metered.ca:80",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-    {
-      urls: "turn:openrelay.metered.ca:443?transport=tcp",
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-  ],
-};
 
 export default function VideoCall() {
   const { id } = useParams();
@@ -42,8 +21,8 @@ export default function VideoCall() {
   const isCaller       = useRef(false);
   const pendingIce     = useRef([]);
   const handlingOffer  = useRef(false);
-  const joined         = useRef(false);
-  const offerSentRef = useRef(false);
+  const offerSentRef   = useRef(false);
+  const iceServersRef  = useRef(null); // ✅ fetched TURN credentials
 
   const [status,        setStatus]        = useState("Starting...");
   const [connected,     setConnected]     = useState(false);
@@ -51,14 +30,43 @@ export default function VideoCall() {
   const [camOn,         setCamOn]         = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
   const [remoteJoined,  setRemoteJoined]  = useState(false);
+  const [iceReady,      setIceReady]      = useState(false); // ✅ gate until ICE fetched
 
+  // ── Fetch TURN credentials on mount ─────────────────────
+  useEffect(() => {
+    const fetchICE = async () => {
+      try {
+        const { data } = await api.get("/turn/credentials");
+        iceServersRef.current = { iceServers: data.iceServers };
+        console.log("[ICE] Credentials fetched ✅", data.iceServers.length, "servers");
+      } catch (err) {
+        console.error("[ICE] Fetch failed, using STUN fallback:", err.message);
+        iceServersRef.current = {
+          iceServers: [
+            { urls: "stun:stun.l.google.com:19302" },
+            { urls: "stun:stun1.l.google.com:19302" },
+          ],
+        };
+      } finally {
+        setIceReady(true); // ✅ ungate regardless of success/failure
+      }
+    };
+    fetchICE();
+  }, []);
+
+  // ── Create RTCPeerConnection ─────────────────────────────
   const createPeer = useCallback(() => {
     if (pcRef.current) {
       pcRef.current.close();
       pcRef.current = null;
     }
 
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const config = iceServersRef.current || {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    };
+
+    console.log("[PC] Creating peer with", config.iceServers.length, "ICE servers");
+    const pc = new RTCPeerConnection(config);
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) emit("webrtc:ice", { sessionId: id, candidate });
@@ -97,6 +105,7 @@ export default function VideoCall() {
     return pc;
   }, [id, emit]);
 
+  // ── Get local stream ─────────────────────────────────────
   const initStream = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -121,6 +130,7 @@ export default function VideoCall() {
     }
   }, [createPeer]);
 
+  // ── Flush buffered ICE candidates ────────────────────────
   const flushPendingIce = useCallback(async () => {
     const pc = pcRef.current;
     if (!pc || !pc.remoteDescription?.type) return;
@@ -135,6 +145,7 @@ export default function VideoCall() {
     pendingIce.current = [];
   }, []);
 
+  // ── Cleanup ──────────────────────────────────────────────
   const cleanup = useCallback(() => {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     pcRef.current?.close();
@@ -147,142 +158,139 @@ export default function VideoCall() {
     connect();
   }, []);
 
-  // ── Main WebRTC effect ───────────────────────────────────
-// ── Main WebRTC effect ───────────────────────────────────
-useEffect(() => {
-  if (!socket) return;
-  // ✅ REMOVED joined.current check — server handles duplicate joins now
+  // ── Main WebRTC effect — wait for ICE before starting ───
+  useEffect(() => {
+    if (!socket) return;
+    if (!iceReady) return; // ✅ wait until TURN creds are fetched
 
-  const setupListeners = () => {
-    console.log("[SOCKET] Joining session", id);
-    socket.emit("joinSession", id);
+    const setupListeners = () => {
+      console.log("[SOCKET] Joining session", id);
+      socket.emit("joinSession", id);
 
-    socket.on("webrtc:role", async ({ role }) => {
-      console.log("[ROLE]", role);
-      isCaller.current = role === "caller";
-      // ✅ Don't re-init stream if already have one
-      if (!pcRef.current) {
-        await initStream();
-      }
-      setStatus(role === "caller" ? "Waiting for other person..." : "Waiting for call...");
-    });
+      socket.on("webrtc:role", async ({ role }) => {
+        console.log("[ROLE]", role);
+        isCaller.current = role === "caller";
+        if (!pcRef.current) await initStream();
+        setStatus(role === "caller" ? "Waiting for other person..." : "Waiting for call...");
+      });
 
-socket.on("webrtc:ready", async () => {
-  if (!isCaller.current) return;
-  if (offerSentRef.current) {
-    console.warn("[READY] Offer already sent, ignoring duplicate");
-    return;
-  }
-  const pc = pcRef.current;
-  if (!pc) return;
-  if (pc.signalingState !== "stable") {
-    console.warn("[READY] Skipping, state:", pc.signalingState);
-    return;
-  }
-  offerSentRef.current = true;
-  console.log("[READY] Creating offer...");
-  try {
-    const offer = await pc.createOffer({
-      offerToReceiveAudio: true,
-      offerToReceiveVideo: true,
-    });
-    await pc.setLocalDescription(offer);
-    console.log("[OFFER] Sent");
-    emit("webrtc:offer", { sessionId: id, offer });
-    setStatus("Connecting...");
-  } catch (err) {
-    console.error("[OFFER] Error:", err);
-    offerSentRef.current = false; // allow retry on error
-  }
-});
-
-    socket.on("webrtc:offer", async (offer) => {
-      console.log("[OFFER] Received");
-      if (isCaller.current) return;
-      if (handlingOffer.current) return;
-      handlingOffer.current = true;
-      try {
-        let pc = pcRef.current;
-        if (!pc) {
-          pc = await initStream();
-          if (!pc) return;
-        }
-        if (pc.signalingState !== "stable") {
-          console.warn("[OFFER] Bad state:", pc.signalingState);
+      socket.on("webrtc:ready", async () => {
+        if (!isCaller.current) return;
+        if (offerSentRef.current) {
+          console.warn("[READY] Offer already sent, ignoring duplicate");
           return;
         }
-        await pc.setRemoteDescription(new RTCSessionDescription(offer));
-        await flushPendingIce();
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        console.log("[ANSWER] Sent");
-        emit("webrtc:answer", { sessionId: id, answer });
-      } catch (err) {
-        console.error("[OFFER] Handle error:", err);
-      } finally {
-        handlingOffer.current = false;
-      }
-    });
-
-    socket.on("webrtc:answer", async (answer) => {
-      if (!isCaller.current) return;
-      const pc = pcRef.current;
-      if (!pc) return;
-      if (pc.signalingState !== "have-local-offer") {
-        console.warn("[ANSWER] Wrong state:", pc.signalingState);
-        return;
-      }
-      try {
-        await pc.setRemoteDescription(new RTCSessionDescription(answer));
-        await flushPendingIce();
-        console.log("[ANSWER] Remote desc set ✅");
-      } catch (err) {
-        console.error("[ANSWER] Error:", err);
-      }
-    });
-
-    socket.on("webrtc:ice", async (candidate) => {
-      const pc = pcRef.current;
-      if (!pc) return;
-      if (pc.remoteDescription?.type) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (e) {
-          console.log("[ICE] Add error:", e);
+        const pc = pcRef.current;
+        if (!pc) return;
+        if (pc.signalingState !== "stable") {
+          console.warn("[READY] Skipping offer, state:", pc.signalingState);
+          return;
         }
-      } else {
-        pendingIce.current.push(candidate);
-      }
-    });
+        offerSentRef.current = true;
+        console.log("[READY] Creating offer...");
+        try {
+          const offer = await pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true,
+          });
+          await pc.setLocalDescription(offer);
+          console.log("[OFFER] Sent");
+          emit("webrtc:offer", { sessionId: id, offer });
+          setStatus("Connecting...");
+        } catch (err) {
+          console.error("[OFFER] Error:", err);
+          offerSentRef.current = false;
+        }
+      });
 
-    socket.on("webrtc:peerLeft", () => {
-      setRemoteJoined(false);
-      setConnected(false);
-      setStatus("Other person left");
-      toast("Other person left the call", { icon: "📵" });
-      if (remoteRef.current) remoteRef.current.srcObject = null;
-    });
-  };
+      socket.on("webrtc:offer", async (offer) => {
+        console.log("[OFFER] Received");
+        if (isCaller.current) return;
+        if (handlingOffer.current) return;
+        handlingOffer.current = true;
+        try {
+          let pc = pcRef.current;
+          if (!pc) {
+            pc = await initStream();
+            if (!pc) return;
+          }
+          if (pc.signalingState !== "stable") {
+            console.warn("[OFFER] Bad state:", pc.signalingState);
+            return;
+          }
+          await pc.setRemoteDescription(new RTCSessionDescription(offer));
+          await flushPendingIce();
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          console.log("[ANSWER] Sent");
+          emit("webrtc:answer", { sessionId: id, answer });
+        } catch (err) {
+          console.error("[OFFER] Handle error:", err);
+        } finally {
+          handlingOffer.current = false;
+        }
+      });
 
-  if (socket.connected) {
-    setupListeners();
-  } else {
-    socket.once("connect", setupListeners);
-  }
+      socket.on("webrtc:answer", async (answer) => {
+        if (!isCaller.current) return;
+        const pc = pcRef.current;
+        if (!pc) return;
+        if (pc.signalingState !== "have-local-offer") {
+          console.warn("[ANSWER] Wrong state:", pc.signalingState);
+          return;
+        }
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          await flushPendingIce();
+          console.log("[ANSWER] Remote desc set ✅");
+        } catch (err) {
+          console.error("[ANSWER] Error:", err);
+        }
+      });
 
-  return () => {
-    socket.off("connect", setupListeners);
-    socket.off("webrtc:role");
-    socket.off("webrtc:ready");
-    socket.off("webrtc:offer");
-    socket.off("webrtc:answer");
-    socket.off("webrtc:ice");
-    socket.off("webrtc:peerLeft");
-  };
-}, [socket]);
+      socket.on("webrtc:ice", async (candidate) => {
+        const pc = pcRef.current;
+        if (!pc) return;
+        if (pc.remoteDescription?.type) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (e) {
+            console.log("[ICE] Add error:", e);
+          }
+        } else {
+          pendingIce.current.push(candidate);
+        }
+      });
+
+      socket.on("webrtc:peerLeft", () => {
+        setRemoteJoined(false);
+        setConnected(false);
+        setStatus("Other person left");
+        toast("Other person left the call", { icon: "📵" });
+        if (remoteRef.current) remoteRef.current.srcObject = null;
+      });
+    };
+
+    if (socket.connected) {
+      setupListeners();
+    } else {
+      socket.once("connect", setupListeners);
+    }
+
+    return () => {
+      socket.off("connect", setupListeners);
+      socket.off("webrtc:role");
+      socket.off("webrtc:ready");
+      socket.off("webrtc:offer");
+      socket.off("webrtc:answer");
+      socket.off("webrtc:ice");
+      socket.off("webrtc:peerLeft");
+    };
+  }, [socket, iceReady]); // ✅ iceReady in deps
 
   useEffect(() => () => cleanup(), [cleanup]);
 
+  // ── Controls ─────────────────────────────────────────────
   const toggleMic = () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) { track.enabled = !track.enabled; setMicOn(track.enabled); }
@@ -323,6 +331,7 @@ socket.on("webrtc:ready", async () => {
     navigate(`/session/${id}`);
   };
 
+  // ── Render ────────────────────────────────────────────────
   return (
     <div className="h-screen bg-gray-900 flex flex-col select-none">
 

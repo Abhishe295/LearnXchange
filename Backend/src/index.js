@@ -12,6 +12,7 @@ import requestRoutes from "./routes/request.routes.js";
 import userRoutes from "./routes/user.routes.js";
 import sessionRoutes from "./routes/session.routes.js";
 import appointmentRoutes from "./routes/appointment.routes.js";
+import turnRoutes from "./routes/turn.routes.js";
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use("/api/bids",bidRoutes);
 app.use("/api/users",userRoutes);
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/appointments",appointmentRoutes);
+app.use("/api/turn", turnRoutes);
 
 
 app.get("/", (req, res) => {
