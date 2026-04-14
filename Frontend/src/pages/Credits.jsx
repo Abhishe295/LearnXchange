@@ -1,34 +1,39 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuthStore } from "../store/authStore";
 import { useSocketStore } from "../store/socketStore";
-import { useEffect } from "react";
+import { Wallet, Zap, Info, CreditCard, TrendingUp } from "lucide-react";
 import toast from "react-hot-toast";
+import Card from "../components/ui/Card";
+import Button from "../components/ui/Button";
+import PageHeader from "../components/ui/PageHeader";
 
 const PACKAGES = [
-  { amount: 5,   price: "₹49",  label: "Starter",  color: "border-gray-200 hover:border-blue-300" },
-  { amount: 10,  price: "₹99",  label: "Basic",    color: "border-blue-300 bg-blue-50", popular: true },
-  { amount: 25,  price: "₹199", label: "Pro",       color: "border-gray-200 hover:border-purple-300" },
-  { amount: 50,  price: "₹349", label: "Power",     color: "border-gray-200 hover:border-green-300" },
+  { amount: 5,  price: "₹49",  label: "Starter", popular: false },
+  { amount: 10, price: "₹99",  label: "Basic",   popular: true  },
+  { amount: 25, price: "₹199", label: "Pro",      popular: false },
+  { amount: 50, price: "₹349", label: "Power",    popular: false },
+];
+
+const HOW_IT_WORKS = [
+  { icon: Zap,        text: "Post a request — tutors bid with their credit price" },
+  { icon: CreditCard, text: "Accept a bid — credits held until session completes" },
+  { icon: TrendingUp, text: "Session complete — credits transfer to tutor automatically" },
 ];
 
 export default function Credits() {
   const { user, topUpCredits, refreshUser } = useAuthStore();
   const { socket, connect, emit } = useSocketStore();
   const [loading, setLoading] = useState(null);
-  const [custom, setCustom] = useState("");
+  const [custom, setCustom]   = useState("");
 
-  // Listen for credit updates from server (after session complete)
   useEffect(() => {
     connect();
     if (!socket || !user) return;
-
     emit("joinUserRoom", user._id);
-
     socket.on("creditsUpdated", ({ message }) => {
       toast.success(message);
-      refreshUser(); // pull latest credits from server
+      refreshUser();
     });
-
     return () => socket.off("creditsUpdated");
   }, [socket, user]);
 
@@ -40,115 +45,110 @@ export default function Credits() {
 
   const handleCustom = async () => {
     const amt = parseInt(custom);
-    if (!amt || amt < 1) return toast.error("Enter a valid amount");
-    if (amt > 1000) return toast.error("Max 1000 credits at once");
+    if (!amt || amt < 1)    return toast.error("Enter a valid amount");
+    if (amt > 1000)          return toast.error("Max 1000 credits at once");
     await handleTopUp(amt);
     setCustom("");
   };
 
+  const pct = Math.min(((user?.credits ?? 0) / 100) * 100, 100);
+
   return (
-    <div className="max-w-2xl mx-auto p-6">
+    <div className="max-w-xl mx-auto px-6 py-8">
+      <PageHeader title="Credits" subtitle="Manage your learning credits" />
 
-      {/* BALANCE CARD */}
-      <div className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl p-6 mb-8 text-white shadow-lg">
-        <p className="text-blue-100 text-sm font-medium mb-1">Current Balance</p>
-        <div className="flex items-end gap-2">
-          <p className="text-5xl font-bold">{user?.credits ?? 0}</p>
-          <p className="text-blue-200 mb-1 text-lg">credits</p>
-        </div>
-        <p className="text-blue-100 text-xs mt-3">
-          1 credit ≈ ₹10 · Used for booking tutoring sessions
-        </p>
-
-        {/* PROGRESS BAR — visual only */}
-        <div className="mt-4">
-          <div className="flex justify-between text-xs text-blue-200 mb-1">
-            <span>Balance</span>
-            <span>{user?.credits}/100</span>
+      {/* BALANCE */}
+      <div className="bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl p-6 mb-6 text-white">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-blue-100 text-sm font-medium">Current Balance</p>
+            <div className="flex items-end gap-2 mt-1">
+              <span className="text-5xl font-bold">{user?.credits ?? 0}</span>
+              <span className="text-blue-200 mb-1">credits</span>
+            </div>
           </div>
-          <div className="w-full bg-blue-400 rounded-full h-2">
-            <div
-              className="bg-white rounded-full h-2 transition-all duration-500"
-              style={{ width: `${Math.min((user?.credits / 100) * 100, 100)}%` }}
-            />
+          <div className="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center">
+            <Wallet size={26} className="text-white" />
+          </div>
+        </div>
+        <p className="text-blue-100 text-xs mb-3">1 credit ≈ ₹10</p>
+        <div>
+          <div className="flex justify-between text-xs text-blue-200 mb-1.5">
+            <span>Balance</span><span>{user?.credits ?? 0} / 100</span>
+          </div>
+          <div className="w-full bg-white/20 rounded-full h-1.5">
+            <div className="bg-white rounded-full h-1.5 transition-all duration-500"
+              style={{ width: `${pct}%` }} />
           </div>
         </div>
       </div>
 
-      {/* HOW CREDITS WORK */}
-      <div className="bg-gray-50 rounded-xl border p-4 mb-6">
-        <h3 className="font-semibold text-gray-700 mb-3">How credits work</h3>
-        <div className="space-y-2">
-          {[
-            { icon: "📢", text: "Post a request — tutors bid with their credit price" },
-            { icon: "✅", text: "Accept a bid — credits are held until session completes" },
-            { icon: "🎓", text: "Session complete — credits transfer from student to tutor" },
-            { icon: "👨‍🏫", text: "Tutors earn credits — withdraw as cash in future" },
-          ].map((item, i) => (
-            <div key={i} className="flex items-start gap-2 text-sm text-gray-600">
-              <span>{item.icon}</span>
-              <span>{item.text}</span>
+      {/* HOW IT WORKS */}
+      <Card className="mb-6">
+        <div className="flex items-center gap-2 mb-3">
+          <Info size={16} className="text-blue-500" />
+          <h3 className="font-semibold text-gray-800 text-sm">How credits work</h3>
+        </div>
+        <div className="space-y-3">
+          {HOW_IT_WORKS.map(({ icon: Icon, text }, i) => (
+            <div key={i} className="flex items-start gap-3">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                <Icon size={13} className="text-blue-500" />
+              </div>
+              <p className="text-sm text-gray-600 leading-snug">{text}</p>
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
-      {/* TOP UP PACKAGES */}
-      <h2 className="font-semibold text-gray-700 mb-4">Add Credits</h2>
-
-      <div className="grid grid-cols-2 gap-3 mb-6">
+      {/* PACKAGES */}
+      <h3 className="font-semibold text-gray-800 mb-3">Add Credits</h3>
+      <div className="grid grid-cols-2 gap-3 mb-4">
         {PACKAGES.map((pkg) => (
           <button
             key={pkg.amount}
             onClick={() => handleTopUp(pkg.amount)}
             disabled={loading === pkg.amount}
-            className={`relative border-2 rounded-xl p-4 text-left transition ${pkg.color} disabled:opacity-50`}
+            className={`relative border-2 rounded-2xl p-4 text-left transition hover:shadow-md disabled:opacity-50 ${
+              pkg.popular
+                ? "border-blue-500 bg-blue-50"
+                : "border-gray-200 bg-white hover:border-blue-200"
+            }`}
           >
             {pkg.popular && (
-              <span className="absolute -top-2 right-3 bg-blue-500 text-white text-xs px-2 py-0.5 rounded-full">
+              <span className="absolute -top-2.5 right-3 bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
                 Popular
               </span>
             )}
-            <p className="text-2xl font-bold text-gray-800">
+            <p className={`text-2xl font-bold ${pkg.popular ? "text-blue-600" : "text-gray-800"}`}>
               {loading === pkg.amount ? "..." : `+${pkg.amount}`}
             </p>
-            <p className="text-sm text-gray-500">{pkg.label}</p>
-            <p className="text-xs text-gray-400 mt-1">{pkg.price}</p>
+            <p className="text-sm text-gray-500 mt-0.5">{pkg.label}</p>
+            <p className="text-xs text-gray-400 mt-1 font-medium">{pkg.price}</p>
           </button>
         ))}
       </div>
 
-      {/* CUSTOM AMOUNT */}
-      <div className="bg-white border rounded-xl p-4">
-        <h3 className="font-semibold text-gray-700 mb-3">Custom amount</h3>
+      {/* CUSTOM */}
+      <Card>
+        <h3 className="font-semibold text-gray-800 text-sm mb-3">Custom amount</h3>
         <div className="flex gap-2">
           <input
             type="number"
-            placeholder="Enter credits (1–1000)"
+            placeholder="1 – 1000 credits"
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCustom()}
-            className="flex-1 border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
-          <button
-            onClick={handleCustom}
-            className="bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-blue-600 transition"
-          >
+          <Button onClick={handleCustom} loading={loading === parseInt(custom)}>
             Add
-          </button>
+          </Button>
         </div>
-        <p className="text-xs text-gray-400 mt-2">
-          💳 Real payment integration coming soon
+        <p className="text-xs text-gray-400 mt-2 flex items-center gap-1">
+          <CreditCard size={11} /> Razorpay / Stripe integration coming soon
         </p>
-      </div>
-
-      {/* FUTURE NOTE */}
-      <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4">
-        <p className="text-sm text-yellow-700 font-medium">🚧 Payment integration coming soon</p>
-        <p className="text-xs text-yellow-600 mt-1">
-          Credits are currently free for testing. Real payments via Razorpay/Stripe will be added soon.
-        </p>
-      </div>
+      </Card>
     </div>
   );
 }

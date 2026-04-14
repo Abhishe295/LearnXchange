@@ -17,6 +17,7 @@ import Sessions from './pages/Sessions';
 import Credits from './pages/Credits'
 import VideoCall from './pages/VideoCall';
 import PersonalizedSession from './pages/PersonalizedSession'
+import Landing from './pages/Landing';
 
 function App() {
   const { checkAuth, user } = useAuthStore();
@@ -47,16 +48,21 @@ function App() {
           user && !isFullscreen ? "ml-56" : ""
         }`}>
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={user ? <Dashboard /> : <Landing />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/request/:id" element={<RequestDetail />} />
-            <Route path="/tutors" element={<Tutors />} />
-            <Route path="/post-request" element={<PostRequest />} />
-            <Route path="/appointments" element={<Appointments />} />
-            <Route path="/sessions" element={<Sessions />} />
-            <Route path="/credits" element={<Credits />} />
-            <Route path="/session/:id/call" element={<VideoCall />} />
-            <Route path="/session/:id" element={<PersonalizedSession />} />
+
+            {user && (
+              <>
+                <Route path="/request/:id" element={<RequestDetail />} />
+                <Route path="/tutors" element={<Tutors />} />
+                <Route path="/post-request" element={<PostRequest />} />
+                <Route path="/appointments" element={<Appointments />} />
+                <Route path="/sessions" element={<Sessions />} />
+                <Route path="/credits" element={<Credits />} />
+                <Route path="/session/:id/call" element={<VideoCall />} />
+                <Route path="/session/:id" element={<PersonalizedSession />} />
+              </>
+            )}
           </Routes>
         </main>
       </div>
