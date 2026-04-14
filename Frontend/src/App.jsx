@@ -20,37 +20,37 @@ import PersonalizedSession from './pages/PersonalizedSession'
 import Landing from './pages/Landing';
 
 function App() {
-  const { checkAuth, user } = useAuthStore();
+  const { checkAuth, user, loading } = useAuthStore(); // ✅ get loading state
   const { pathname } = useLocation();
 
   useEffect(() => {
     checkAuth();
   }, []);
 
-  // Pages that should NOT show sidebar (full screen)
-  const fullscreen = [
-    `/session/${pathname.split("/")[2]}/call`,
-    "/login",
-  ];
-  const isFullscreen = fullscreen.includes(pathname) ||
-                       pathname.endsWith("/call");
+  const fullscreen = [`/session/${pathname.split("/")[2]}/call`, "/login"];
+  const isFullscreen = fullscreen.includes(pathname) || pathname.endsWith("/call");
+
+  // ✅ Don't render routes until we know if user is logged in
+  if (loading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-gray-50">
+        <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <>
       <SocketManager />
       <Navbar />
-
       <div className="flex">
         {user && !isFullscreen && <Sidebar />}
-
-        {/* MAIN CONTENT — offset by sidebar width */}
         <main className={`flex-1 min-h-[calc(100vh-53px)] bg-gray-50 ${
           user && !isFullscreen ? "ml-56" : ""
         }`}>
           <Routes>
             <Route path="/" element={user ? <Dashboard /> : <Landing />} />
             <Route path="/login" element={<Login />} />
-
             {user && (
               <>
                 <Route path="/request/:id" element={<RequestDetail />} />

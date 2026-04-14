@@ -43,6 +43,7 @@ export default function VideoCall() {
   const pendingIce     = useRef([]);
   const handlingOffer  = useRef(false);
   const joined         = useRef(false);
+  const offerSentRef = useRef(false);
 
   const [status,        setStatus]        = useState("Starting...");
   const [connected,     setConnected]     = useState(false);
@@ -138,6 +139,7 @@ export default function VideoCall() {
     localStreamRef.current?.getTracks().forEach((t) => t.stop());
     pcRef.current?.close();
     pcRef.current = null;
+    offerSentRef.current = false;
   }, []);
 
   // ── Connect socket on mount ──────────────────────────────
@@ -146,129 +148,138 @@ export default function VideoCall() {
   }, []);
 
   // ── Main WebRTC effect ───────────────────────────────────
-  useEffect(() => {
-    if (!socket) return;
-    if (joined.current) return;
+// ── Main WebRTC effect ───────────────────────────────────
+useEffect(() => {
+  if (!socket) return;
+  // ✅ REMOVED joined.current check — server handles duplicate joins now
 
-    const setupListeners = () => {
-      if (joined.current) return;
-      joined.current = true;
+  const setupListeners = () => {
+    console.log("[SOCKET] Joining session", id);
+    socket.emit("joinSession", id);
 
-      console.log("[SOCKET] Joining session", id);
-      socket.emit("joinSession", id);
-
-      socket.on("webrtc:role", async ({ role }) => {
-        console.log("[ROLE]", role);
-        isCaller.current = role === "caller";
+    socket.on("webrtc:role", async ({ role }) => {
+      console.log("[ROLE]", role);
+      isCaller.current = role === "caller";
+      // ✅ Don't re-init stream if already have one
+      if (!pcRef.current) {
         await initStream();
-        setStatus(role === "caller" ? "Waiting for other person..." : "Waiting for call...");
-      });
+      }
+      setStatus(role === "caller" ? "Waiting for other person..." : "Waiting for call...");
+    });
 
-      socket.on("webrtc:ready", async () => {
-        if (!isCaller.current) return;
-        const pc = pcRef.current;
-        if (!pc) return;
-        console.log("[READY] Creating offer...");
-        try {
-          const offer = await pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true,
-          });
-          await pc.setLocalDescription(offer);
-          console.log("[OFFER] Sent");
-          emit("webrtc:offer", { sessionId: id, offer });
-          setStatus("Connecting...");
-        } catch (err) {
-          console.error("[OFFER] Error:", err);
+socket.on("webrtc:ready", async () => {
+  if (!isCaller.current) return;
+  if (offerSentRef.current) {
+    console.warn("[READY] Offer already sent, ignoring duplicate");
+    return;
+  }
+  const pc = pcRef.current;
+  if (!pc) return;
+  if (pc.signalingState !== "stable") {
+    console.warn("[READY] Skipping, state:", pc.signalingState);
+    return;
+  }
+  offerSentRef.current = true;
+  console.log("[READY] Creating offer...");
+  try {
+    const offer = await pc.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: true,
+    });
+    await pc.setLocalDescription(offer);
+    console.log("[OFFER] Sent");
+    emit("webrtc:offer", { sessionId: id, offer });
+    setStatus("Connecting...");
+  } catch (err) {
+    console.error("[OFFER] Error:", err);
+    offerSentRef.current = false; // allow retry on error
+  }
+});
+
+    socket.on("webrtc:offer", async (offer) => {
+      console.log("[OFFER] Received");
+      if (isCaller.current) return;
+      if (handlingOffer.current) return;
+      handlingOffer.current = true;
+      try {
+        let pc = pcRef.current;
+        if (!pc) {
+          pc = await initStream();
+          if (!pc) return;
         }
-      });
-
-      socket.on("webrtc:offer", async (offer) => {
-        console.log("[OFFER] Received");
-        if (isCaller.current) return;
-        if (handlingOffer.current) return;
-        handlingOffer.current = true;
-
-        try {
-          let pc = pcRef.current;
-          if (!pc) {
-            pc = await initStream();
-            if (!pc) return;
-          }
-          if (pc.signalingState !== "stable") {
-            console.warn("[OFFER] Bad state:", pc.signalingState);
-            return;
-          }
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          await flushPendingIce();
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          console.log("[ANSWER] Sent");
-          emit("webrtc:answer", { sessionId: id, answer });
-        } catch (err) {
-          console.error("[OFFER] Handle error:", err);
-        } finally {
-          handlingOffer.current = false;
-        }
-      });
-
-      socket.on("webrtc:answer", async (answer) => {
-        if (!isCaller.current) return;
-        const pc = pcRef.current;
-        if (!pc) return;
-        if (pc.signalingState !== "have-local-offer") {
-          console.warn("[ANSWER] Wrong state:", pc.signalingState);
+        if (pc.signalingState !== "stable") {
+          console.warn("[OFFER] Bad state:", pc.signalingState);
           return;
         }
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        await flushPendingIce();
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log("[ANSWER] Sent");
+        emit("webrtc:answer", { sessionId: id, answer });
+      } catch (err) {
+        console.error("[OFFER] Handle error:", err);
+      } finally {
+        handlingOffer.current = false;
+      }
+    });
+
+    socket.on("webrtc:answer", async (answer) => {
+      if (!isCaller.current) return;
+      const pc = pcRef.current;
+      if (!pc) return;
+      if (pc.signalingState !== "have-local-offer") {
+        console.warn("[ANSWER] Wrong state:", pc.signalingState);
+        return;
+      }
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+        await flushPendingIce();
+        console.log("[ANSWER] Remote desc set ✅");
+      } catch (err) {
+        console.error("[ANSWER] Error:", err);
+      }
+    });
+
+    socket.on("webrtc:ice", async (candidate) => {
+      const pc = pcRef.current;
+      if (!pc) return;
+      if (pc.remoteDescription?.type) {
         try {
-          await pc.setRemoteDescription(new RTCSessionDescription(answer));
-          await flushPendingIce();
-          console.log("[ANSWER] Remote desc set ✅");
-        } catch (err) {
-          console.error("[ANSWER] Error:", err);
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {
+          console.log("[ICE] Add error:", e);
         }
-      });
+      } else {
+        pendingIce.current.push(candidate);
+      }
+    });
 
-      socket.on("webrtc:ice", async (candidate) => {
-        const pc = pcRef.current;
-        if (!pc) return;
-        if (pc.remoteDescription?.type) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (e) {
-            console.log("[ICE] Add error:", e);
-          }
-        } else {
-          pendingIce.current.push(candidate);
-        }
-      });
+    socket.on("webrtc:peerLeft", () => {
+      setRemoteJoined(false);
+      setConnected(false);
+      setStatus("Other person left");
+      toast("Other person left the call", { icon: "📵" });
+      if (remoteRef.current) remoteRef.current.srcObject = null;
+    });
+  };
 
-      socket.on("webrtc:peerLeft", () => {
-        setRemoteJoined(false);
-        setConnected(false);
-        setStatus("Other person left");
-        toast("Other person left the call", { icon: "📵" });
-        if (remoteRef.current) remoteRef.current.srcObject = null;
-      });
-    };
+  if (socket.connected) {
+    setupListeners();
+  } else {
+    socket.once("connect", setupListeners);
+  }
 
-    // ✅ Key fix: if socket exists but isn't connected yet, wait for it
-    if (socket.connected) {
-      setupListeners();
-    } else {
-      socket.once("connect", setupListeners);
-    }
-
-    return () => {
-      socket.off("connect", setupListeners);
-      socket.off("webrtc:role");
-      socket.off("webrtc:ready");
-      socket.off("webrtc:offer");
-      socket.off("webrtc:answer");
-      socket.off("webrtc:ice");
-      socket.off("webrtc:peerLeft");
-    };
-  }, [socket]);
+  return () => {
+    socket.off("connect", setupListeners);
+    socket.off("webrtc:role");
+    socket.off("webrtc:ready");
+    socket.off("webrtc:offer");
+    socket.off("webrtc:answer");
+    socket.off("webrtc:ice");
+    socket.off("webrtc:peerLeft");
+  };
+}, [socket]);
 
   useEffect(() => () => cleanup(), [cleanup]);
 

@@ -2,6 +2,21 @@ import Message from "../models/Message.js";
 import User from "../models/User.js";
 
 const callRooms = {};
+// sessionId -> { caller: socketId|null, answerer: socketId|null }
+
+function getOrCreateRoom(sessionId) {
+  if (!callRooms[sessionId]) {
+    callRooms[sessionId] = { caller: null, answerer: null };
+  }
+  return callRooms[sessionId];
+}
+
+function cleanRoom(sessionId, io) {
+  const room = callRooms[sessionId];
+  if (!room) return;
+  if (room.caller && !io.sockets.sockets.has(room.caller)) room.caller = null;
+  if (room.answerer && !io.sockets.sockets.has(room.answerer)) room.answerer = null;
+}
 
 export const socketHandler = (io, socket) => {
   console.log("User connected:", socket.id);
@@ -21,32 +36,49 @@ export const socketHandler = (io, socket) => {
     socket.join(requestId);
   });
 
- socket.on("joinSession", (sessionId) => {
-socket.join(sessionId);
+  socket.on("joinSession", (sessionId) => {
+    socket.join(sessionId);
+    socket.currentSession = sessionId;
 
-if (!callRooms[sessionId]) callRooms[sessionId] = [];
+    const room = getOrCreateRoom(sessionId);
+    cleanRoom(sessionId, io);
 
-// ✅ Remove dead sockets (IMPORTANT FIX)
-callRooms[sessionId] = callRooms[sessionId].filter((id) =>
-io.sockets.sockets.has(id)
-);
+    // ✅ Already assigned a role — just re-confirm it (StrictMode remount)
+    if (room.caller === socket.id) {
+      console.log(`[WebRTC] ${socket.id} re-confirmed as caller`);
+      socket.emit("webrtc:role", { role: "caller" });
+      if (room.answerer) io.to(socket.id).emit("webrtc:ready");
+      return;
+    }
 
-if (!callRooms[sessionId].includes(socket.id)) {
-callRooms[sessionId].push(socket.id);
-}
+    if (room.answerer === socket.id) {
+      console.log(`[WebRTC] ${socket.id} re-confirmed as answerer`);
+      socket.emit("webrtc:role", { role: "answerer" });
+      return;
+    }
 
-const role = callRooms[sessionId].length === 1 ? "caller" : "answerer";
+    // ✅ New socket — assign role
+    if (!room.caller) {
+      room.caller = socket.id;
+      console.log(`[WebRTC] ${socket.id} → caller`);
+      socket.emit("webrtc:role", { role: "caller" });
+      return;
+    }
 
-console.log(`[WebRTC] ${socket.id} → ${role} (${callRooms[sessionId].length} in room)`);
+    if (!room.answerer) {
+      room.answerer = socket.id;
+      console.log(`[WebRTC] ${socket.id} → answerer`);
+      socket.emit("webrtc:role", { role: "answerer" });
+      // ✅ Both present — signal caller
+      console.log(`[WebRTC] Both ready, signaling caller ${room.caller}`);
+      io.to(room.caller).emit("webrtc:ready");
+      return;
+    }
 
-socket.emit("webrtc:role", { role });
-
-if (callRooms[sessionId].length === 2) {
-const callerSocketId = callRooms[sessionId][0];
-io.to(callerSocketId).emit("webrtc:ready");
-}
-});
-
+    // Room full
+    console.log(`[WebRTC] Room full, rejecting ${socket.id}`);
+    socket.emit("webrtc:full");
+  });
 
   socket.on("sendMessage", async ({ sessionId, senderId, text }) => {
     try {
@@ -58,12 +90,12 @@ io.to(callerSocketId).emit("webrtc:ready");
   });
 
   socket.on("webrtc:offer", ({ sessionId, offer }) => {
-    console.log(`[WebRTC] offer from ${socket.id} to room ${sessionId}`);
+    console.log(`[WebRTC] offer from ${socket.id}`);
     socket.to(sessionId).emit("webrtc:offer", offer);
   });
 
   socket.on("webrtc:answer", ({ sessionId, answer }) => {
-    console.log(`[WebRTC] answer from ${socket.id} to room ${sessionId}`);
+    console.log(`[WebRTC] answer from ${socket.id}`);
     socket.to(sessionId).emit("webrtc:answer", answer);
   });
 
@@ -73,23 +105,26 @@ io.to(callerSocketId).emit("webrtc:ready");
 
   socket.on("webrtc:leave", ({ sessionId }) => {
     socket.to(sessionId).emit("webrtc:peerLeft");
-    if (callRooms[sessionId]) {
-      callRooms[sessionId] = callRooms[sessionId].filter((id) => id !== socket.id);
-      if (callRooms[sessionId].length === 0) delete callRooms[sessionId];
+    const room = callRooms[sessionId];
+    if (room) {
+      if (room.caller === socket.id) room.caller = null;
+      if (room.answerer === socket.id) room.answerer = null;
+      if (!room.caller && !room.answerer) delete callRooms[sessionId];
     }
   });
 
   socket.on("disconnect", async () => {
     console.log("User disconnected:", socket.id);
-
-    // ✅ Notify peers in any session this socket was part of
-    Object.keys(callRooms).forEach((sessionId) => {
-      if (callRooms[sessionId].includes(socket.id)) {
+    const sessionId = socket.currentSession;
+    if (sessionId && callRooms[sessionId]) {
+      const room = callRooms[sessionId];
+      if (room.caller === socket.id || room.answerer === socket.id) {
         socket.to(sessionId).emit("webrtc:peerLeft");
-        callRooms[sessionId] = callRooms[sessionId].filter((id) => id !== socket.id);
-        if (callRooms[sessionId].length === 0) delete callRooms[sessionId];
+        if (room.caller === socket.id) room.caller = null;
+        if (room.answerer === socket.id) room.answerer = null;
+        if (!room.caller && !room.answerer) delete callRooms[sessionId];
       }
-    });
+    }
 
     if (socket.userId) {
       try {
