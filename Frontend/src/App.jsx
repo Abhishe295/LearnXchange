@@ -18,6 +18,9 @@ import Credits from './pages/Credits'
 import VideoCall from './pages/VideoCall';
 import PersonalizedSession from './pages/PersonalizedSession'
 import Landing from './pages/Landing';
+import EditProfile from './pages/EditProfile';
+import UserProfile from './pages/UserProfile';
+
 
 function App() {
   const { checkAuth, user, loading } = useAuthStore(); // ✅ get loading state
@@ -61,6 +64,8 @@ function App() {
                 <Route path="/credits" element={<Credits />} />
                 <Route path="/session/:id/call" element={<VideoCall />} />
                 <Route path="/session/:id" element={<PersonalizedSession />} />
+                <Route path="/profile/edit"    element={<EditProfile />} />
+                <Route path="/profile/:userId" element={<UserProfile />} />
               </>
             )}
           </Routes>

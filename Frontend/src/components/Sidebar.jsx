@@ -2,7 +2,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "../store/authStore";
 import {
   LayoutDashboard, Search, Megaphone,
-  Calendar, MessageSquare, Wallet, LogOut, ChevronRight
+  Calendar, MessageSquare, Wallet, LogOut, ChevronRight, UserCircle
 } from "lucide-react";
 import Avatar from "./ui/Avatar";
 
@@ -72,15 +72,25 @@ export default function Sidebar() {
       </nav>
 
       {/* LOGOUT */}
-      <div className="px-3 pb-4 border-t border-gray-100 pt-3">
-        <button
-          onClick={async () => { await logout(); navigate("/login"); }}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-500 hover:bg-red-50 transition"
-        >
-          <LogOut size={17} />
-          Logout
-        </button>
-      </div>
+      <div className="px-3 pb-4 border-t border-gray-100 pt-3 space-y-0.5">
+  <Link
+    to="/profile/edit"
+    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
+      pathname === "/profile/edit"
+        ? "bg-blue-600 text-white shadow-sm"
+        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+    }`}
+  >
+    <UserCircle size={17} className={pathname === "/profile/edit" ? "text-white" : "text-gray-500"} />
+    Edit Profile
+  </Link>
+  <button
+    onClick={async () => { await logout(); navigate("/login"); }}
+    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-red-500 hover:bg-red-50 transition"
+  >
+    <LogOut size={17} /> Logout
+  </button>
+</div>
     </aside>
   );
 }

@@ -59,4 +59,14 @@ export const useAuthStore = create((set) => ({
       toast.error("Failed to add credits");
     }
   },
+  updateProfile: async (data) => {
+  try {
+    const res = await api.patch("/users/profile", data);
+    set({ user: res.data.user });
+    toast.success("Profile updated!");
+    return res.data.user;
+  } catch (err) {
+    toast.error(err.response?.data?.message || "Failed to update");
+  }
+},
 }));

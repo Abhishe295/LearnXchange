@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAuthStore } from "../store/authStore";
 import { useSocketStore } from "../store/socketStore";
 import { useNotificationStore } from "../store/notificationStore";
+import { useRequestStore } from "../store/requestStore";
 import toast from "react-hot-toast";
 
 export default function SocketManager() {
@@ -15,37 +16,31 @@ export default function SocketManager() {
     connect();
   }, [user]);
 
-  // Join personal room once socket is actually connected
+  // Join personal room once socket is connected
   useEffect(() => {
     if (!socket || !user) return;
-
-    // ✅ Wait for confirmed connection before joining room
-    if (socket.connected) {
-      emit("joinUserRoom", user._id);
-    } else {
-      socket.once("connect", () => {
-        emit("joinUserRoom", user._id);
-      });
-    }
+    const join = () => emit("joinUserRoom", user._id);
+    if (socket.connected) join();
+    else socket.once("connect", join);
   }, [socket, user]);
 
-  // All global socket event listeners
+  // Global socket listeners
   useEffect(() => {
     if (!socket || !user) return;
 
     socket.on("newBid", (bid) => {
       add({ type: "bid", message: `💰 New bid of ${bid.credits} credits on your request` });
-      toast(`💰 New bid received!`, { icon: "🔔" });
+      toast("New bid received!", { icon: "💰" });
     });
 
     socket.on("bidAccepted", () => {
-      add({ type: "appointment", message: `✅ Your bid was accepted! Check appointments.` });
+      add({ type: "appointment", message: "✅ Your bid was accepted! Check appointments." });
       toast.success("Your bid was accepted! 🎉");
     });
 
     socket.on("appointmentAccepted", ({ sessionId }) => {
-      add({ type: "session", message: `🎉 Tutor accepted your appointment!`, sessionId });
-      toast.success("Tutor accepted your appointment! 🎉");
+      add({ type: "session", message: "🎉 Tutor accepted your appointment!", sessionId });
+      toast.success("Tutor accepted your appointment!");
     });
 
     socket.on("creditsUpdated", ({ message }) => {
@@ -59,12 +54,28 @@ export default function SocketManager() {
       toast(message, { icon: "📅" });
     });
 
+    // ✅ New request — update all dashboards live
+    socket.on("newRequest", (request) => {
+      useRequestStore.getState().prependRequest(request);
+    });
+
+    socket.on("ratingReceived", ({ rating, newAvg, totalRatings }) => {
+  add({
+    type: "rating",
+    message: `⭐ You received a ${rating}-star rating! New avg: ${newAvg}`,
+  });
+  toast.success(`New rating received: ${rating} stars ⭐`);
+  refreshUser();
+});
+
     return () => {
       socket.off("newBid");
       socket.off("bidAccepted");
       socket.off("appointmentAccepted");
       socket.off("creditsUpdated");
       socket.off("newAppointment");
+      socket.off("newRequest");
+      socket.off("ratingReceived");
     };
   }, [socket, user]);
 

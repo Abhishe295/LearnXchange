@@ -85,7 +85,12 @@ export default function Tutors() {
                   <Avatar name={tutor.username} size="lg" />
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="font-bold text-gray-900">{tutor.username}</h2>
+                      <h2
+                        onClick={(e) => { e.stopPropagation(); navigate(`/profile/${tutor._id}`); }}
+                        className="font-bold text-gray-900 hover:text-blue-600 cursor-pointer transition"
+                      >
+                        {tutor.username}
+                      </h2>
                       <span className={`flex items-center gap-1 text-xs font-medium ${
                         tutor.isOnline ? "text-green-500" : "text-gray-400"
                       }`}>

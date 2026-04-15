@@ -11,17 +11,16 @@ export const createRequest = async (req, res) => {
 
     const request = await Request.create({
       studentId: req.user,
-      subject,
-      topic,
-      description,
-      urgency,
-      maxCredits,
+      subject, topic, description, urgency, maxCredits,
     });
 
-    res.status(201).json({
-      success: true,
-      request,
-    });
+    const populated = await Request.findById(request._id)
+      .populate("studentId", "username");
+
+    // ✅ Broadcast to everyone so dashboards update live
+    req.io.emit("newRequest", populated);
+
+    res.status(201).json({ success: true, request: populated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

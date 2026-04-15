@@ -133,59 +133,59 @@ export const getSessions = async (req, res) => {
 };
 
 // ✅ NEW — complete session + transfer credits
-export const completeSession = async (req, res) => {
-  try {
-    const session = await Session.findById(req.params.id);
-    if (!session) return res.status(404).json({ message: "Not found" });
-    if (session.status === "completed") {
-      return res.status(400).json({ message: "Already completed" });
-    }
+// export const completeSession = async (req, res) => {
+//   try {
+//     const session = await Session.findById(req.params.id);
+//     if (!session) return res.status(404).json({ message: "Not found" });
+//     if (session.status === "completed") {
+//       return res.status(400).json({ message: "Already completed" });
+//     }
 
-    session.status = "completed";
-    await session.save();
+//     session.status = "completed";
+//     await session.save();
 
-    // Find appointment
-    const appointment = await Appointment.findOne({ sessionId: session._id });
-    let creditsAmount = 0;
+//     // Find appointment
+//     const appointment = await Appointment.findOne({ sessionId: session._id });
+//     let creditsAmount = 0;
 
-    if (appointment) {
-      if (appointment.bidId) {
-        // Bidding flow — use bid credits
-        const bid = await Bid.findById(appointment.bidId);
-        if (bid) creditsAmount = bid.credits;
-      } else if (appointment.credits) {
-        // Direct flow — use appointment credits
-        creditsAmount = appointment.credits;
-      }
+//     if (appointment) {
+//       if (appointment.bidId) {
+//         // Bidding flow — use bid credits
+//         const bid = await Bid.findById(appointment.bidId);
+//         if (bid) creditsAmount = bid.credits;
+//       } else if (appointment.credits) {
+//         // Direct flow — use appointment credits
+//         creditsAmount = appointment.credits;
+//       }
 
-      if (creditsAmount > 0) {
-        const student = await User.findById(session.studentId);
-        if (student.credits < creditsAmount) {
-          return res.status(400).json({ message: "Student has insufficient credits" });
-        }
+//       if (creditsAmount > 0) {
+//         const student = await User.findById(session.studentId);
+//         if (student.credits < creditsAmount) {
+//           return res.status(400).json({ message: "Student has insufficient credits" });
+//         }
 
-        await User.findByIdAndUpdate(session.studentId, {
-          $inc: { credits: -creditsAmount },
-        });
-        await User.findByIdAndUpdate(session.teacherId, {
-          $inc: { credits: creditsAmount },
-        });
-      }
-    }
+//         await User.findByIdAndUpdate(session.studentId, {
+//           $inc: { credits: -creditsAmount },
+//         });
+//         await User.findByIdAndUpdate(session.teacherId, {
+//           $inc: { credits: creditsAmount },
+//         });
+//       }
+//     }
 
-    // Notify both via socket
-    req.io.to(session.studentId.toString()).emit("creditsUpdated", {
-      message: `Session complete! -${creditsAmount} credits deducted`,
-    });
-    req.io.to(session.teacherId.toString()).emit("creditsUpdated", {
-      message: `Session complete! +${creditsAmount} credits earned 🎉`,
-    });
+//     // Notify both via socket
+//     req.io.to(session.studentId.toString()).emit("creditsUpdated", {
+//       message: `Session complete! -${creditsAmount} credits deducted`,
+//     });
+//     req.io.to(session.teacherId.toString()).emit("creditsUpdated", {
+//       message: `Session complete! +${creditsAmount} credits earned 🎉`,
+//     });
 
-    res.json({ success: true, session, creditsAmount });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-};
+//     res.json({ success: true, session, creditsAmount });
+//   } catch (err) {
+//     res.status(500).json({ message: err.message });
+//   }
+// };
 
 /* ================= GET ================= */
 export const getAppointments = async (req, res) => {
@@ -223,6 +223,7 @@ export const getSessionById = async (req, res) => {
 export const rateSession = async (req, res) => {
   try {
     const { rating, review } = req.body;
+
     const session = await Session.findById(req.params.id)
       .populate("teacherId");
 
@@ -237,22 +238,81 @@ export const rateSession = async (req, res) => {
       return res.status(403).json({ message: "Only student can rate" });
     }
 
-    session.rating = rating;
-    session.review = review;
+    session.rating  = rating;
+    session.review  = review;
     session.ratedAt = new Date();
     await session.save();
 
-    // Update tutor's average rating
-    const allSessions = await Session.find({
+    // Recalculate tutor's average rating
+    const allRated = await Session.find({
       teacherId: session.teacherId._id,
       rating: { $ne: null },
     });
-    const avg = allSessions.reduce((sum, s) => sum + s.rating, 0) / allSessions.length;
+    const avg = allRated.reduce((sum, s) => sum + s.rating, 0) / allRated.length;
+
     await User.findByIdAndUpdate(session.teacherId._id, {
-      rating: Math.round(avg * 10) / 10,
+      rating:       Math.round(avg * 10) / 10,
+      totalRatings: allRated.length,
+    });
+
+    // ✅ Emit real-time rating update to tutor
+    req.io.to(session.teacherId._id.toString()).emit("ratingReceived", {
+      rating,
+      newAvg: Math.round(avg * 10) / 10,
+      totalRatings: allRated.length,
     });
 
     res.json({ success: true, session });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// Also fix completeSession to increment sessionsCompleted
+export const completeSession = async (req, res) => {
+  try {
+    const session = await Session.findById(req.params.id);
+    if (!session) return res.status(404).json({ message: "Not found" });
+    if (session.status === "completed") {
+      return res.status(400).json({ message: "Already completed" });
+    }
+
+    session.status = "completed";
+    await session.save();
+
+    // ✅ Increment sessionsCompleted for both users
+    await User.findByIdAndUpdate(session.studentId, { $inc: { sessionsCompleted: 1 } });
+    await User.findByIdAndUpdate(session.teacherId,  { $inc: { sessionsCompleted: 1 } });
+
+    const appointment = await Appointment.findOne({ sessionId: session._id });
+    let creditsAmount = 0;
+
+    if (appointment) {
+      if (appointment.bidId) {
+        const bid = await Bid.findById(appointment.bidId);
+        if (bid) creditsAmount = bid.credits;
+      } else if (appointment.credits) {
+        creditsAmount = appointment.credits;
+      }
+
+      if (creditsAmount > 0) {
+        const student = await User.findById(session.studentId);
+        if (student.credits < creditsAmount) {
+          return res.status(400).json({ message: "Insufficient credits" });
+        }
+        await User.findByIdAndUpdate(session.studentId, { $inc: { credits: -creditsAmount } });
+        await User.findByIdAndUpdate(session.teacherId,  { $inc: { credits:  creditsAmount } });
+      }
+    }
+
+    req.io.to(session.studentId.toString()).emit("creditsUpdated", {
+      message: `Session complete! -${creditsAmount} credits deducted`,
+    });
+    req.io.to(session.teacherId.toString()).emit("creditsUpdated", {
+      message: `Session complete! +${creditsAmount} credits earned 🎉`,
+    });
+
+    res.json({ success: true, session, creditsAmount });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
